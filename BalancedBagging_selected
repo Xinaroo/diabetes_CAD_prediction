@@ -1,0 +1,37 @@
+# 선택할 컬럼 리스트와 데이터프레임 생성
+selected_columns = ['clopidogrel', 'age', 'insulin', 'furosemide', 'gender', 'hematocrit_mean','urea_nitrogen_max' ]
+
+train_X_selected = train_X[selected_columns]
+test_X_selected = test_X[selected_columns]
+
+# 모델 학습
+balanced_bagging_model = BalancedBaggingClassifier(random_state=0, n_estimators=400, max_features=0.75, sampling_strategy=0.7,
+                                                   base_estimator = DecisionTreeClassifier(max_depth=20, min_samples_split=10, 
+min_samples_leaf=5, max_features=0.75, class_weight={0: 1.0, 1: 0.7}))
+
+balanced_bagging_model.fit(train_X_selected, train_y)
+
+y_pred_selected = balanced_bagging_model.predict(test_X_selected)
+
+# 성능 측정
+accuracy_selected = accuracy_score(test_y, y_pred_selected)
+print("Accuracy:", accuracy_selected)
+
+y_pred_proba_selected = balanced_bagging_model.predict_proba(test_X_selected)[:, 1]
+roc_auc_selected = roc_auc_score(test_y, y_pred_proba_selected)
+print("AUC:", roc_auc_selected)
+
+# ROC curve 그리기
+fpr, tpr, thresholds = roc_curve(test_y, y_pred_proba_selected)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc_selected)
+plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.legend(loc='lower right')
+plt.title('BalancedBagging selected ROC Curve')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.show()
