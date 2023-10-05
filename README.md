@@ -12,4 +12,4 @@ Predicting the risk of coronary artery disease(CAD) onset in diabetes patients u
    ### daiv_dataset_final_final_preprocessed
 
 4. 5가지 모델에 훈련 후 성능 확인
-   ### Model_5train.ipynb
+   ### Model_5_train.ipynb
