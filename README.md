@@ -31,3 +31,9 @@ classifier = BalancedBaggingClassifier(
     )
 )
 ```
+
+6. XGBoost와 BalancedBagging 비교
+   ### XGBoost_train.ipynb
+
+7. feature selection을 통한 최종 모델링 코드
+   ### BalancedBagging_selected
