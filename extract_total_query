@@ -1,0 +1,218 @@
+DROP TABLE IF EXISTS mimiciv_hosp.daiv_pharmacy;
+
+CREATE TABLE mimiciv_hosp.daiv_pharmacy AS (
+
+WITH backbone AS(
+	SELECT
+		*
+	FROM
+		mimiciv_hosp.daiv_backbone
+),
+
+pharmacy_info AS (
+	SELECT
+		pharmacy.*
+	FROM
+		backbone
+	LEFT OUTER JOIN
+		mimiciv_hosp.pharmacy AS pharmacy
+	ON
+		backbone.subject_id = pharmacy.subject_id
+		AND
+		backbone.hadm_id = pharmacy.hadm_id
+),
+
+heparin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS heparin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Heparin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+insulin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS insulin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Insulin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+digoxin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS digoxin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Digoxin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+clopidogrel_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS clopidogrel
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Clopidogrel'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+spironolactone_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS spironolactone
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Spironolactone'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+bumetanide_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS bumetanide
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Bumetanide'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+torsemide_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS torsemide
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Torsemide'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+furosemide_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS furosemide
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Furosemide'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+metolazone_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS metolazone
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Metolazone'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+simvastatin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS simvastatin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Simvastatin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+allopurinol_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS allopurinol
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Allopurinol'
+	GROUP BY
+		pharmacy_info.subject_id
+)
+
+SELECT
+	backbone.subject_id,
+	backbone.hadm_id,
+	
+	coalesce(heparin_.heparin, 'N') AS heparin,
+	coalesce(clopidogrel_.clopidogrel, 'N') AS clopidogrel,
+	coalesce(insulin_.insulin, 'N') AS insulin,
+	coalesce(digoxin_.digoxin, 'N') AS digoxin,
+	coalesce(spironolactone_.spironolactone, 'N') AS sprionolactone,
+	coalesce(bumetanide_.bumetanide, 'N') AS bumetanide,
+	coalesce(torsemide_.torsemide, 'N') AS torsemide,
+	coalesce(furosemide_.furosemide, 'N') AS furosemide,
+	coalesce(metolazone_.metolazone, 'N') AS metolazone,
+	coalesce(simvastatin_.simvastatin, 'N') AS simvastatin,
+	coalesce(allopurinol_.allopurinol, 'N') AS allopurinol
+FROM
+	backbone
+LEFT OUTER JOIN
+	heparin_
+ON
+	backbone.subject_id = heparin_.subject_id
+LEFT OUTER JOIN
+	insulin_
+ON
+	backbone.subject_id = insulin_.subject_id
+LEFT OUTER JOIN
+	digoxin_
+ON
+	backbone.subject_id = digoxin_.subject_id
+LEFT OUTER JOIN
+	clopidogrel_
+ON
+	backbone.subject_id = clopidogrel_.subject_id
+LEFT OUTER JOIN
+	spironolactone_
+ON
+	backbone.subject_id = spironolactone_.subject_id
+LEFT OUTER JOIN
+	bumetanide_
+ON
+	backbone.subject_id = bumetanide_.subject_id
+LEFT OUTER JOIN
+	torsemide_
+ON
+	backbone.subject_id = torsemide_.subject_id
+LEFT OUTER JOIN
+	furosemide_
+ON
+	backbone.subject_id = furosemide_.subject_id
+LEFT OUTER JOIN
+	metolazone_
+ON
+	backbone.subject_id = metolazone_.subject_id
+LEFT OUTER JOIN
+	simvastatin_
+ON
+	backbone.subject_id = simvastatin_.subject_id
+LEFT OUTER JOIN
+	allopurinol_
+ON
+	backbone.subject_id = allopurinol_.subject_id
+)
