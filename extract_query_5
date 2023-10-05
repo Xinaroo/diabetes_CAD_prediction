@@ -1,0 +1,1210 @@
+# Query Design 1. Backbone Data
+
+DROP TABLE IF EXISTS mimiciv_hosp.daiv_backbone;
+
+CREATE TABLE mimiciv_hosp.daiv_backbone AS (
+
+-- 같은 환자에 대해 제일 빠르게 진단 받은 케이스만 고려하기 위해 사용
+-- 재입원의 케이스도 고려하지 않음 (첫 진단만)
+-- 가능한 이유 = 이미 아래의 ORDER BY 절을 통해 subject_id, hadm_id, seq_num 순서로
+-- 이미 정렬이 되어있기 때문에 가능 -> row_num이 1인 레코드만 가져오면 됨.
+-- ROW_NUMBER() OVER (PARTITION BY DIAG.subject_id ORDER BY DIAG.hadm_id) AS row_num
+
+-- Diabetes Patients
+WITH DIAG_DIABETES AS (
+	SELECT /*+materialize */
+		DIAG.subject_id,
+		DIAG.hadm_id,
+		DIAG.seq_num,
+		DIAG.icd_code,
+		DIAG.icd_version,
+		D_DIAG.long_title,
+		ROW_NUMBER() OVER (PARTITION BY DIAG.subject_id ORDER BY DIAG.hadm_id) AS row_num
+	FROM 
+		mimiciv_hosp.diagnoses_icd AS DIAG
+	LEFT OUTER JOIN
+		mimiciv_hosp.d_icd_diagnoses AS D_DIAG
+	ON
+		DIAG.icd_code = D_DIAG.icd_code
+	WHERE 
+		-- ICD-9 (ICD-10 없음)
+		DIAG.icd_code LIKE '250%'
+	ORDER BY
+		DIAG.subject_id,
+		DIAG.hadm_id,
+		DIAG.seq_num
+),
+
+-- CAD Patients
+DIAG_CAD AS (
+	SELECT /*+materialize */
+		DIAG.subject_id,
+		DIAG.hadm_id,
+		DIAG.seq_num,
+		DIAG.icd_code,
+		DIAG.icd_version,
+		D_DIAG.long_title,
+		ROW_NUMBER() OVER (PARTITION BY DIAG.subject_id ORDER BY DIAG.hadm_id) AS row_num
+	FROM 
+		mimiciv_hosp.diagnoses_icd AS DIAG
+	LEFT OUTER JOIN
+		mimiciv_hosp.d_icd_diagnoses AS D_DIAG
+	ON
+		DIAG.icd_code = D_DIAG.icd_code
+	WHERE 
+		-- ICD-9
+		-- Unstable angina
+		DIAG.icd_code IN ('4111', '41181', '41189', '4130', '4131', '4139')
+		OR
+		-- CV - coronary artery ds
+		DIAG.icd_code IN ('412', '41400', '41401', '4142', '4143', '4148', '4149', '4292')
+		OR
+		-- Previous CABG, PCI
+		DIAG.icd_code IN ('41402', '41403', '41404', '41405', 'V4581', 'V4582')
+		OR
+		-- ICD-10, 당뇨병 환자가 CAD 환자가 될 수 있는 케이스 4 건 정도 나옴
+		DIAG.icd_code LIKE 'I25%'
+	ORDER BY
+		DIAG.subject_id,
+		DIAG.hadm_id,
+		DIAG.seq_num
+),
+
+-- Hyper Tension Patients
+DIAG_HP AS (
+	SELECT /*+materialize */
+		DIAG.subject_id,
+		DIAG.hadm_id,
+		DIAG.seq_num,
+		DIAG.icd_code,
+		DIAG.icd_version,
+		D_DIAG.long_title,
+		ROW_NUMBER() OVER (PARTITION BY DIAG.subject_id ORDER BY DIAG.hadm_id) AS row_num
+	FROM 
+		mimiciv_hosp.diagnoses_icd AS DIAG
+	LEFT OUTER JOIN
+		mimiciv_hosp.d_icd_diagnoses AS D_DIAG
+	ON
+		DIAG.icd_code = D_DIAG.icd_code
+	WHERE 
+		-- ICD-9
+		-- CV - essential ht
+		DIAG.icd_code IN ('4011', '4019')
+		OR
+		-- Hypertensive Heart Disease
+		DIAG.icd_code IN ('40210', '40290')
+		OR
+		-- Renovascular and other secondary hypertension
+		DIAG.icd_code IN ('40511', '40519', '40591', '40599')
+		OR
+		-- ICD-10
+		DIAG.icd_code IN ('I10', 'I11', 'I12', 'I13', 'I15', 'I16')
+	ORDER BY
+		DIAG.subject_id,
+		DIAG.hadm_id,
+		DIAG.seq_num
+),
+
+-- final table
+DIAG_TOTAL AS (
+	SELECT /*+materialize */
+		-- 환자 ID, 입원 ID
+		DIAG_DIABETES.subject_id AS subject_id,
+		DIAG_DIABETES.hadm_id AS hadm_id,
+
+		-- 당뇨병 진단 순서 및 ICD CODE
+		DIAG_DIABETES.seq_num AS diabetes_seq_num,
+		DIAG_DIABETES.icd_code AS diabetes_icd_code,
+		DIAG_DIABETES.long_title AS diabetes_title,
+	
+		-- Hypertension 진단 순서 및 ICD CODE
+		DIAG_HP.seq_num AS hp_seq_num,
+		DIAG_HP.icd_code AS hp_icd_code,
+		DIAG_HP.long_title AS hp_long_title,
+
+		-- CAD 진단 순서 및 ICD CODE
+		DIAG_CAD.seq_num AS cad_seq_num,
+		DIAG_CAD.icd_code AS CAD_icd_code,
+		DIAG_CAD.long_title AS cad_title
+	FROM
+		DIAG_DIABETES
+	LEFT OUTER JOIN
+		DIAG_CAD
+	ON
+		DIAG_DIABETES.subject_id = DIAG_CAD.subject_id
+		AND
+		DIAG_DIABETES.hadm_id = DIAG_CAD.hadm_id
+	LEFT OUTER JOIN
+		DIAG_HP
+	ON
+		DIAG_DIABETES.subject_id = DIAG_HP.subject_id
+		AND
+		DIAG_DIABETES.hadm_id = DIAG_HP.hadm_id
+	WHERE
+		(
+			DIAG_DIABETES.row_num = 1 -- 당뇨병으로 처음 입원한 사람
+		)
+		AND
+		(
+			(
+				DIAG_DIABETES.seq_num < DIAG_CAD.seq_num -- 당뇨병 진단 후, CAD 진단 환자
+				AND
+				DIAG_CAD.row_num = 1 -- CAD로 진단 받은 케이스 또한 처음 CAD 관련 질환을 진단 받은 케이스로 가져와야 함.
+			)
+			OR
+				DIAG_CAD IS NULL -- 당뇨병만 걸린 환자
+		)
+		
+	ORDER BY
+		DIAG_DIABETES.subject_id,
+		DIAG_DIABETES.hadm_id,
+		diabetes_seq_num,
+		diabetes_title,
+		cad_seq_num,
+		cad_title
+)
+
+SELECT
+	subject_id,
+	hadm_id,
+	diabetes_seq_num,
+	diabetes_icd_code,
+	hp_seq_num,
+	hp_icd_code,
+	cad_seq_num,
+	cad_icd_code
+FROM
+	DIAG_TOTAL
+)
+
+
+
+# Query Design 2. Demographic Data (admissions, patients)
+
+DROP TABLE IF EXISTS mimiciv_hosp.daiv_demographic;
+
+CREATE TABLE mimiciv_hosp.daiv_demographic AS (
+
+WITH backbone AS(
+	SELECT
+		*
+	FROM
+		mimiciv_hosp.daiv_backbone
+),
+
+patient_info AS(
+	-- the age of a patient = admission time - anchor_year + anchor_age
+	-- from github
+	SELECT
+		ad.subject_id
+		, ad.hadm_id
+		, ad.admittime
+		, pa.anchor_age
+		, pa.anchor_year
+		, pa.anchor_age + EXTRACT(YEAR FROM AGE(ad.admittime, make_timestamp(pa.anchor_year, 1, 1, 0, 0, 0)))::smallint AS age
+		, pa.gender
+		, ad.admission_type
+	FROM mimiciv_hosp.admissions ad
+	INNER JOIN mimiciv_hosp.patients pa
+		ON ad.subject_id = pa.subject_id
+)
+
+SELECT
+	backbone.subject_id,
+	backbone.hadm_id,
+	patient_info.age,
+	patient_info.gender
+FROM
+	backbone
+INNER JOIN
+	patient_info
+ON
+	backbone.subject_id = patient_info.subject_id
+	AND
+	backbone.hadm_id = patient_info.hadm_id
+)
+
+
+
+# Query Design 3. omr Data (omr)
+
+DROP TABLE IF EXISTS mimiciv_hosp.daiv_bmi_bp;
+
+CREATE TABLE mimiciv_hosp.daiv_bmi_bp AS (
+
+WITH backbone AS(
+	SELECT
+		*
+	FROM
+		mimiciv_hosp.daiv_backbone
+),
+
+-- 당뇨병 환자들(backbone)의 BMI 추출
+bmi AS(
+	SELECT
+		omr.*,
+		-- BMI가 text라서 CAST로 FLOAT type으로 변경
+		CAST(result_value AS FLOAT) AS bmi_num
+	FROM
+		backbone
+	LEFT OUTER JOIN
+		mimiciv_hosp.omr AS omr
+	ON
+		backbone.subject_id = omr.subject_id
+	WHERE
+		omr.result_name LIKE 'BMI (kg/m2)'
+	ORDER BY
+		backbone.subject_id ASC,
+		omr.chartdate ASC
+),
+
+-- BMI min, max, mean 형태로 추출
+bmi_data AS(
+	SELECT
+		subject_id,
+		MIN(bmi_num) AS bmi_min,
+		MAX(bmi_num) AS bmi_max,
+		-- ROUND를 쓰려면 인자가 numeric이어야 하는데, double precision인 경우
+		-- 에러가 발생해서 형변환을 해주어야 한다.
+		ROUND(AVG(bmi_num)::numeric, 1) AS bmi_mean
+	FROM
+		bmi
+	GROUP BY
+		bmi.subject_id
+),
+
+-- 당뇨병 환자들의 BP 추출
+bp AS(
+	SELECT
+		omr.*,
+		CAST(SPLIT_PART(result_value, '/', 1) AS smallint) AS systolic_bp,
+		CAST(SPLIT_PART(result_value, '/', 2) AS smallint) AS diastolic_bp
+	FROM
+		backbone
+	LEFT OUTER JOIN
+		mimiciv_hosp.omr AS omr
+	ON
+		backbone.subject_id = omr.subject_id
+	WHERE
+		omr.result_name LIKE 'Blood Pressure'
+	ORDER BY
+		backbone.subject_id ASC,
+		omr.chartdate ASC
+),
+
+-- systolic bp min, max, mean, diastolic bp min, max, mean 추출
+bp_data AS(
+	SELECT
+		subject_id,
+		MIN(systolic_bp) AS systolic_bp_min,
+		MAX(systolic_bp) AS systolic_bp_max,
+		ROUND(AVG(systolic_bp)::numeric, 1) AS systolic_bp_mean,
+		MIN(diastolic_bp) AS diastolic_bp_min,
+		MAX(diastolic_bp) AS diastolic_bp_max,
+		ROUND(AVG(diastolic_bp)::numeric, 1) AS diastolic_bp_mean
+	FROM
+		bp
+	GROUP BY
+		bp.subject_id
+),
+
+backbone_w_bmi AS(
+	SELECT
+		backbone.subject_id,
+		backbone.hadm_id,
+		bmi_data.bmi_min,
+		bmi_data.bmi_max,
+		bmi_data.bmi_mean
+	FROM
+		backbone
+	LEFT OUTER JOIN
+		bmi_data
+	ON
+		backbone.subject_id = bmi_data.subject_id
+)
+
+SELECT
+	backbone_w_bmi.*,
+	bp_data.systolic_bp_min,
+	bp_data.systolic_bp_max,
+	bp_data.systolic_bp_mean,
+	bp_data.diastolic_bp_min,
+	bp_data.diastolic_bp_max,
+	bp_data.diastolic_bp_mean
+FROM
+	backbone_w_bmi
+LEFT OUTER JOIN
+	bp_data
+ON
+	backbone_w_bmi.subject_id = bp_data.subject_id
+)
+
+
+
+# Query Design 4. Lab Data (labevents, d_labitems)
+
+DROP TABLE IF EXISTS mimiciv_hosp.daiv_lab;
+
+CREATE TABLE mimiciv_hosp.daiv_lab AS (
+
+WITH backbone AS(
+	SELECT
+		*
+	FROM
+		mimiciv_hosp.daiv_backbone
+),
+
+lab AS(
+	SELECT
+		*
+	FROM
+		mimiciv_hosp.daiv_lab_temp
+),
+
+glucose AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS glucose_min,
+		MAX(valuenum) AS glucose_max,
+		ROUND(AVG(valuenum)::numeric, 1) AS glucose_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Glucose'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+potassium AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS potassium_min,
+		MAX(valuenum) AS potassium_max,
+		ROUND(AVG(valuenum)::numeric, 1) AS potassium_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Potassium'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+sodium AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS sodium_min,
+		MAX(valuenum) AS sodium_max,
+		ROUND(AVG(valuenum)::numeric, 1) AS sodium_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Sodium'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+chloride AS(
+SELECT
+	subject_id,
+	MIN(valuenum) AS chloride_min,
+	MAX(valuenum) AS chloride_max,
+	ROUND(AVG(valuenum)::numeric, 1) AS chloride_mean
+FROM
+	lab
+WHERE
+	lab.label LIKE 'Chloride'
+	AND
+	lab.fluid LIKE 'Blood'
+GROUP BY
+	subject_id
+),
+
+creatinine AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS creatinine_min,
+		MAX(valuenum) AS creatinine_max,
+		ROUND(AVG(valuenum)::numeric, 4) AS creatinine_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Creatinine'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+urea_nitrogen AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS urea_nitrogen_min,
+		MAX(valuenum) AS urea_nitrogen_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS urea_nitrogen_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Urea Nitrogen'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+bicarbonate AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS bicarbonate_min,
+		MAX(valuenum) AS bicarbonate_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS bicarbonate_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Bicarbonate'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+anion_gap AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS anion_gap_min,
+		MAX(valuenum) AS anion_gap_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS anion_gap_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Anion Gap'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+hematocrit AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS hematocrit_min,
+		MAX(valuenum) AS hematocrit_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS hematocrit_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Hematocrit'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+hemoglobin AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS hemoglobin_min,
+		MAX(valuenum) AS hemoglobin_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS hemoglobin_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Hemoglobin'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+platelet_count AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS platelet_count_min,
+		MAX(valuenum) AS platelet_count_max,
+		ROUND(AVG(valuenum)::numeric, 0) AS platelet_count_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Platelet Count'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+white_blood_cells AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS white_blood_cells_min,
+		MAX(valuenum) AS white_blood_cells_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS white_blood_cells_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'White Blood Cells'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+magnesium AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS magnesium_min,
+		MAX(valuenum) AS magnesium_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS magnesium_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Magnesium'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+mchc AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS mchc_min,
+		MAX(valuenum) AS mchc_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS mchc_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'MCHC'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+mch AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS mch_min,
+		MAX(valuenum) AS mch_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS mch_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'MCH'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+mcv AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS mcv_min,
+		MAX(valuenum) AS mcv_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS mcv_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'MCV'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+red_blood_cells AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS red_blood_cells_min,
+		MAX(valuenum) AS red_blood_cells_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS red_blood_cells_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Red Blood Cells'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+rdw AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS rdw_min,
+		MAX(valuenum) AS rdw_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS rdw_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'RDW'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+phosphate AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS phosphate_min,
+		MAX(valuenum) AS phosphate_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS phosphate_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Phosphate'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+calcium_total AS(
+	SELECT
+		subject_id,
+		MIN(valuenum) AS calcium_total_min,
+		MAX(valuenum) AS calcium_total_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS calcium_total_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Calcium, Total'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+lactate AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS lactate_min,
+		MAX(valuenum) AS lactate_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS lactate_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Lactate'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+monocytes AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS monocytes_min,
+		MAX(valuenum) AS monocytes_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS monocytes_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Monocytes'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+eosinophils AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS eosinophils_min,
+		MAX(valuenum) AS eosinophils_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS eosinophils_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Eosinophils'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+basophils AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS basophils_min,
+		MAX(valuenum) AS basophils_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS basophils_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Basophils'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+),
+
+neutrophils AS (
+	SELECT
+		subject_id,
+		MIN(valuenum) AS neutrophils_min,
+		MAX(valuenum) AS neutrophils_max,
+		-- 꽤 작은 수치라 4자리 수까지 표현
+		ROUND(AVG(valuenum)::numeric, 4) AS neutrophils_mean
+	FROM
+		lab
+	WHERE
+		lab.label LIKE 'Neutrophils'
+		AND
+		lab.fluid LIKE 'Blood'
+	GROUP BY
+		subject_id
+)
+
+SELECT
+	backbone.subject_id,
+	backbone.hadm_id,
+	
+	glucose.glucose_min,
+	glucose.glucose_max,
+	glucose.glucose_mean,
+	
+	potassium.potassium_min,
+	potassium.potassium_max,
+	potassium.potassium_mean,
+	
+	sodium.sodium_min,
+	sodium.sodium_max,
+	sodium.sodium_mean,
+	
+	chloride.chloride_min,
+	chloride.chloride_max,
+	chloride.chloride_mean,
+	
+	creatinine.creatinine_min,
+	creatinine.creatinine_max,
+	creatinine.creatinine_mean,
+	
+	urea_nitrogen.urea_nitrogen_min,
+	urea_nitrogen.urea_nitrogen_max,
+	urea_nitrogen.urea_nitrogen_mean,
+	
+	bicarbonate.bicarbonate_min,
+	bicarbonate.bicarbonate_max,
+	bicarbonate.bicarbonate_mean,
+	
+	anion_gap.anion_gap_min,
+	anion_gap.anion_gap_max,
+	anion_gap.anion_gap_mean,
+	
+	hematocrit.hematocrit_min,
+	hematocrit.hematocrit_max,
+	hematocrit.hematocrit_mean,
+	
+	hemoglobin.hemoglobin_min,
+	hemoglobin.hemoglobin_max,
+	hemoglobin.hemoglobin_mean,
+	
+	platelet_count.platelet_count_min,
+	platelet_count.platelet_count_max,
+	platelet_count.platelet_count_mean,
+	
+	white_blood_cells.white_blood_cells_min,
+	white_blood_cells.white_blood_cells_max,
+	white_blood_cells.white_blood_cells_mean,
+	
+	magnesium.magnesium_min,
+	magnesium.magnesium_max,
+	magnesium.magnesium_mean,
+	
+	mchc.mchc_min,
+	mchc.mchc_max,
+	mchc.mchc_mean,
+	
+	mch.mch_min,
+	mch.mch_max,
+	mch.mch_mean,
+	
+	mcv.mcv_min,
+	mcv.mcv_max,
+	mcv.mcv_mean,
+	
+	red_blood_cells.red_blood_cells_min,
+	red_blood_cells.red_blood_cells_max,
+	red_blood_cells.red_blood_cells_mean,
+	
+	rdw.rdw_min,
+	rdw.rdw_max,
+	rdw.rdw_mean,
+	
+	phosphate.phosphate_min,
+	phosphate.phosphate_max,
+	phosphate.phosphate_mean,
+	
+	calcium_total.calcium_total_min,
+	calcium_total.calcium_total_max,
+	calcium_total.calcium_total_mean,
+	
+	lactate.lactate_min,
+	lactate.lactate_max,
+	lactate.lactate_mean,
+	
+	monocytes.monocytes_min,
+	monocytes.monocytes_max,
+	monocytes.monocytes_mean,
+	
+	eosinophils.eosinophils_min,
+	eosinophils.eosinophils_max,
+	eosinophils.eosinophils_mean,
+	
+	basophils.basophils_min,
+	basophils.basophils_max,
+	basophils.basophils_mean,
+	
+	neutrophils.neutrophils_min,
+	neutrophils.neutrophils_max,
+	neutrophils.neutrophils_mean
+FROM
+	backbone
+LEFT OUTER JOIN
+	glucose
+ON
+	backbone.subject_id = glucose.subject_id
+LEFT OUTER JOIN
+	potassium
+ON
+	backbone.subject_id = potassium.subject_id
+LEFT OUTER JOIN
+	sodium
+ON
+	backbone.subject_id = sodium.subject_id
+LEFT OUTER JOIN
+	chloride
+ON
+	backbone.subject_id = chloride.subject_id
+LEFT OUTER JOIN
+	creatinine
+ON
+	backbone.subject_id = creatinine.subject_id
+LEFT OUTER JOIN
+	urea_nitrogen
+ON
+	backbone.subject_id = urea_nitrogen.subject_id
+LEFT OUTER JOIN
+	bicarbonate
+ON
+	backbone.subject_id = bicarbonate.subject_id
+LEFT OUTER JOIN
+	anion_gap
+ON
+	backbone.subject_id = anion_gap.subject_id
+LEFT OUTER JOIN
+	hematocrit
+ON
+	backbone.subject_id = hematocrit.subject_id
+LEFT OUTER JOIN
+	hemoglobin
+ON
+	backbone.subject_id = hemoglobin.subject_id
+LEFT OUTER JOIN
+	platelet_count
+ON
+	backbone.subject_id = platelet_count.subject_id
+LEFT OUTER JOIN
+	white_blood_cells
+ON
+	backbone.subject_id = white_blood_cells.subject_id
+LEFT OUTER JOIN
+	magnesium
+ON
+	backbone.subject_id = magnesium.subject_id
+LEFT OUTER JOIN
+	mchc
+ON
+	backbone.subject_id = mchc.subject_id
+LEFT OUTER JOIN
+	mch
+ON
+	backbone.subject_id = mch.subject_id
+LEFT OUTER JOIN
+	mcv
+ON
+	backbone.subject_id = mcv.subject_id
+LEFT OUTER JOIN
+	red_blood_cells
+ON
+	backbone.subject_id = red_blood_cells.subject_id
+LEFT OUTER JOIN
+	rdw
+ON
+	backbone.subject_id = rdw.subject_id
+LEFT OUTER JOIN
+	phosphate
+ON
+	backbone.subject_id = phosphate.subject_id
+LEFT OUTER JOIN
+	calcium_total
+ON
+	backbone.subject_id = calcium_total.subject_id
+LEFT OUTER JOIN
+	lactate
+ON
+	backbone.subject_id = lactate.subject_id
+LEFT OUTER JOIN
+	monocytes
+ON
+	backbone.subject_id = monocytes.subject_id
+LEFT OUTER JOIN
+	eosinophils
+ON
+	backbone.subject_id = eosinophils.subject_id
+LEFT OUTER JOIN
+	basophils
+ON
+	backbone.subject_id = basophils.subject_id
+LEFT OUTER JOIN
+	neutrophils
+ON
+	backbone.subject_id = neutrophils.subject_id
+)
+
+
+
+# Query Desing 5. Drug Data (emar, emar_detail, pharmacy, prescriptions)
+DROP TABLE IF EXISTS mimiciv_hosp.daiv_pharmacy;
+
+CREATE TABLE mimiciv_hosp.daiv_pharmacy AS (
+
+WITH backbone AS(
+	SELECT
+		*
+	FROM
+		mimiciv_hosp.daiv_backbone
+),
+
+pharmacy_info AS (
+	SELECT
+		pharmacy.*
+	FROM
+		backbone
+	LEFT OUTER JOIN
+		mimiciv_hosp.pharmacy AS pharmacy
+	ON
+		backbone.subject_id = pharmacy.subject_id
+		AND
+		backbone.hadm_id = pharmacy.hadm_id
+),
+
+heparin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS heparin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Heparin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+insulin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS insulin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Insulin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+digoxin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS digoxin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Digoxin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+clopidogrel_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS clopidogrel
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Clopidogrel'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+spironolactone_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS spironolactone
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Spironolactone'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+bumetanide_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS bumetanide
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Bumetanide'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+torsemide_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS torsemide
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Torsemide'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+furosemide_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS furosemide
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Furosemide'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+metolazone_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS metolazone
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Metolazone'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+simvastatin_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS simvastatin
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Simvastatin'
+	GROUP BY
+		pharmacy_info.subject_id
+),
+
+allopurinol_ AS (
+	SELECT
+		pharmacy_info.subject_id,
+		'Y' AS allopurinol
+	FROM
+		pharmacy_info
+	WHERE
+		pharmacy_info.medication LIKE 'Allopurinol'
+	GROUP BY
+		pharmacy_info.subject_id
+)
+
+SELECT
+	backbone.subject_id,
+	backbone.hadm_id,
+	
+	coalesce(heparin_.heparin, 'N') AS heparin,
+	coalesce(clopidogrel_.clopidogrel, 'N') AS clopidogrel,
+	coalesce(insulin_.insulin, 'N') AS insulin,
+	coalesce(digoxin_.digoxin, 'N') AS digoxin,
+	coalesce(spironolactone_.spironolactone, 'N') AS sprionolactone,
+	coalesce(bumetanide_.bumetanide, 'N') AS bumetanide,
+	coalesce(torsemide_.torsemide, 'N') AS torsemide,
+	coalesce(furosemide_.furosemide, 'N') AS furosemide,
+	coalesce(metolazone_.metolazone, 'N') AS metolazone,
+	coalesce(simvastatin_.simvastatin, 'N') AS simvastatin,
+	coalesce(allopurinol_.allopurinol, 'N') AS allopurinol
+FROM
+	backbone
+LEFT OUTER JOIN
+	heparin_
+ON
+	backbone.subject_id = heparin_.subject_id
+LEFT OUTER JOIN
+	insulin_
+ON
+	backbone.subject_id = insulin_.subject_id
+LEFT OUTER JOIN
+	digoxin_
+ON
+	backbone.subject_id = digoxin_.subject_id
+LEFT OUTER JOIN
+	clopidogrel_
+ON
+	backbone.subject_id = clopidogrel_.subject_id
+LEFT OUTER JOIN
+	spironolactone_
+ON
+	backbone.subject_id = spironolactone_.subject_id
+LEFT OUTER JOIN
+	bumetanide_
+ON
+	backbone.subject_id = bumetanide_.subject_id
+LEFT OUTER JOIN
+	torsemide_
+ON
+	backbone.subject_id = torsemide_.subject_id
+LEFT OUTER JOIN
+	furosemide_
+ON
+	backbone.subject_id = furosemide_.subject_id
+LEFT OUTER JOIN
+	metolazone_
+ON
+	backbone.subject_id = metolazone_.subject_id
+LEFT OUTER JOIN
+	simvastatin_
+ON
+	backbone.subject_id = simvastatin_.subject_id
+LEFT OUTER JOIN
+	allopurinol_
+ON
+	backbone.subject_id = allopurinol_.subject_id
+)
