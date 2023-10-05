@@ -1,4 +1,7 @@
 # diabetes_CAD_prediction
+
+당뇨병 환자의 CAD 동반 질환 예측
+
 Predicting the risk of coronary artery disease(CAD) onset in diabetes patients using the MIMIC-IV dataset and an undersampling-based model
 
 1. MIMIC-IV 데이터 추출 및 정제
