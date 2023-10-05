@@ -15,6 +15,6 @@ Predicting the risk of coronary artery disease(CAD) onset in diabetes patients u
    ### Model_5_train.ipynb
 
 5. BalancedBagging 하이퍼파라미터 튜닝
-   '''
+```
 BalancedBaggingClassifier(random_state=0, n_estimators=400, max_features=0.75, sampling_strategy=0.7, base_estimator = DecisionTreeClassifier(max_depth=20, min_samples_split=10, min_samples_leaf=5, max_features=0.75, class_weight={0: 1.0, 1: 0.7})))
-'''
+```
