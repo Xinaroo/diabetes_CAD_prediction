@@ -1,3 +1,4 @@
+```sql
 DROP TABLE IF EXISTS mimiciv_hosp.daiv_pharmacy;
 
 CREATE TABLE mimiciv_hosp.daiv_pharmacy AS (
@@ -216,3 +217,4 @@ LEFT OUTER JOIN
 ON
 	backbone.subject_id = allopurinol_.subject_id
 )
+```
